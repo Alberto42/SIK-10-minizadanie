@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/time.h>
 
 // this sets ICMP declaration
 #include <netinet/ip_icmp.h>
@@ -15,6 +16,9 @@
 
 #define BSIZE 1000
 #define ICMP_HEADER_LEN 8
+
+struct timeval tv;
+__uint32_t time_sent;
 
 unsigned short in_cksum(unsigned short *addr, int len);
 
@@ -64,6 +68,10 @@ void send_ping_request(int sock, char *s_send_addr) {
     icmp->icmp_cksum = 0; // checksum computed over whole ICMP package
     icmp->icmp_cksum = in_cksum((unsigned short *) icmp, icmp_len);
 
+    gettimeofday(&tv, NULL);
+    time_sent = tv.tv_sec * 1000 * 1000 + tv.tv_usec;
+
+//    icmp->icmp_hun.ih_void = time_sent;
     len = sendto(sock, (void *) icmp, icmp_len, 0,
                  (struct sockaddr *) &send_addr,
                  (socklen_t) sizeof(send_addr));
@@ -93,7 +101,11 @@ int receive_ping_reply(int sock) {
     len = recvfrom(sock, (void *) rcv_buffer, sizeof(rcv_buffer), 0,
                    (struct sockaddr *) &rcv_addr, &rcv_addr_len);
 
-    printf("received %zd bytes from %s\n", len, inet_ntoa(rcv_addr.sin_addr));
+    gettimeofday(&tv, NULL);
+    __uint32_t time_received = tv.tv_sec * 1000 * 1000 + tv.tv_usec;
+
+    printf("received %zd bytes from %s in %d\n microseconds", len,
+           inet_ntoa(rcv_addr.sin_addr), time_received - time_sent);
 
     // recvfrom returns whole packet (with IP header)
     ip = (struct ip *) rcv_buffer;
@@ -116,8 +128,10 @@ int receive_ping_reply(int sock) {
               getpid());
 
     data_len = len - ip_header_len - ICMP_HEADER_LEN;
-    printf("correct ICMP echo reply; payload size %zd content %.*s\n", data_len,
-           (int) data_len, (rcv_buffer + ip_header_len + ICMP_HEADER_LEN));
+    printf("correct ICMP echo reply; payload size %zd ttl %d content %.*s\n",
+           data_len,
+           (int) data_len, ip->ip_ttl,
+           (rcv_buffer + ip_header_len + ICMP_HEADER_LEN));
     return 1;
 }
 
@@ -134,10 +148,11 @@ int main(int argc, char *argv[]) {
 
     drop_to_nobody();
 
-    send_ping_request(sock, argv[1]);
+    while (1) {
+        send_ping_request(sock, argv[1]);
 
-    while (!receive_ping_reply(sock));
-
+        while (!receive_ping_reply(sock));
+    }
     if (close(sock) == -1)
         syserr("close");
 
